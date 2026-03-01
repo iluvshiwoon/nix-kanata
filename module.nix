@@ -87,9 +87,6 @@
     defaults.layer_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}") layerFilesToLink;
   };
 
-  statusIconsConfig = lib.optionalAttrs (statusFilesToLink != {}) {
-    defaults.status_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/status_icons/${builtins.baseNameOf path}") statusFilesToLink;
-  };
   # The wrapper ensures kanata is launched via sudo but maintains process control so the tray can cleanly kill it
   sudoKanataWrapper = pkgs.writeScript "sudo-kanata" ''
     #!/bin/bash
@@ -117,7 +114,6 @@
         };
       }
       layerIconsConfig
-      statusIconsConfig
       cfg.tray.settings
     ]
   );
@@ -168,7 +164,7 @@ in {
     tray.icons.status = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {};
-      description = "Map of kanata-tray status states (e.g., 'active', 'inactive') to custom icon files (PNG recommended).";
+      description = "Map of kanata-tray status states to custom text labels or `U+XXXX` codepoints. Keys MUST be one of: 'default', 'crash', 'pause', or 'live-reload'.";
     };
 
     tray.icons.labels = lib.mkOption {
@@ -197,6 +193,13 @@ in {
 
   config = lib.mkMerge [
     {
+      # Enforce strict naming for kanata-tray status icons
+      assertions = [
+        {
+          assertion = builtins.all (name: builtins.elem name ["default" "crash" "pause" "live-reload"]) (builtins.attrNames cfg.tray.icons.status);
+          message = "services.kanata.tray.icons.status keys must only be one of: 'default', 'crash', 'pause', or 'live-reload'.";
+        }
+      ];
       system.activationScripts.preActivation.text = lib.mkAfter ''
         # Kill running processes
         /usr/bin/pkill -x kanata 2>/dev/null || true
