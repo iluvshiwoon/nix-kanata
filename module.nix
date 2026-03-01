@@ -69,21 +69,6 @@
   # Safe fallback for user home directory
   userHome = config.users.users.${cfg.user}.home or "/Users/${cfg.user}";
 
-  trayConfig = tomlFormat.generate "kanata-tray.toml" (lib.recursiveUpdate (lib.recursiveUpdate {
-      defaults = {
-        kanata_executable = "${userHome}/.local/bin/sudo-kanata";
-        tcp_port = 5829;
-        autorestart_on_crash = true;
-      };
-      presets.default = {
-        kanata_config = cfg.configFile;
-        autorun = true;
-        extra_args = ["--nodelay"];
-      };
-    }
-    layerIconsConfig)
-  cfg.tray.settings);
-
   # The wrapper ensures kanata is launched via sudo but maintains process control so the tray can cleanly kill it
   sudoKanataWrapper = pkgs.writeScript "sudo-kanata" ''
     #!/bin/bash
@@ -95,6 +80,22 @@
      /usr/bin/sudo /usr/bin/pkill -x kanata 2>/dev/null) &
     wait $KANATA_PID
   '';
+
+  trayConfig = tomlFormat.generate "kanata-tray.toml" (lib.recursiveUpdate (lib.recursiveUpdate {
+      defaults = {
+        # Directly reference the immutable Nix store wrapper script
+        kanata_executable = "${sudoKanataWrapper}";
+        tcp_port = 5829;
+        autorestart_on_crash = true;
+      };
+      presets.default = {
+        kanata_config = cfg.configFile;
+        autorun = true;
+        extra_args = ["--nodelay"];
+      };
+    }
+    layerIconsConfig)
+  cfg.tray.settings);
 in {
   options.services.kanata = {
     enable = lib.mkEnableOption "kanata keyboard remapper (via Homebrew)";
@@ -177,20 +178,21 @@ in {
 
       system.activationScripts.postActivation.text = lib.mkAfter ''
         ${lib.optionalString (cfg.mode == "tray") ''
-          # Create sudo-kanata wrapper
-          sudo --user=${cfg.user} -- mkdir -p "${userHome}/.local/bin"
-          sudo --user=${cfg.user} -- cp -f ${sudoKanataWrapper} "${userHome}/.local/bin/sudo-kanata"
-          sudo --user=${cfg.user} -- chmod +x "${userHome}/.local/bin/sudo-kanata"
+          # Clean up the old, stateful wrapper script if it exists!
+          rm -f "${userHome}/.local/bin/sudo-kanata"
 
-          # Install kanata-tray TOML config
-          sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray"
-          sudo --user=${cfg.user} -- cp -f ${trayConfig} "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
+          # Symlink kanata-tray TOML config (instead of copying)
+          sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/icons"
+          sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
+          sudo --user=${cfg.user} -- ln -s ${trayConfig} "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
 
           ${lib.optionalString (allIcons != {}) ''
-            # Install layer icons
-            sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/icons"
+            # Symlink layer icons
             ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
-                name: path: ''sudo --user=${cfg.user} -- cp -f ${path} "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}"''
+                name: path: ''
+                  sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}"
+                  sudo --user=${cfg.user} -- ln -s ${path} "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}"
+                ''
               )
               allIcons)}
           ''}
@@ -199,7 +201,8 @@ in {
         ${lib.optionalString (cfg.configSource != null) ''
           # Symlink kanata config
           sudo --user=${cfg.user} -- mkdir -p "$(dirname "${cfg.configFile}")"
-          sudo --user=${cfg.user} -- ln -sf ${cfg.configSource} "${cfg.configFile}"
+          sudo --user=${cfg.user} -- rm -f "${cfg.configFile}"
+          sudo --user=${cfg.user} -- ln -s ${cfg.configSource} "${cfg.configFile}"
         ''}
       '';
 
@@ -233,7 +236,7 @@ in {
         };
       };
 
-      # sudoers NOPASSWD entry so the tray app can cleanly start/stop the homebrew binary
+      # sudoers NOPASSWD entry so the wrapper can cleanly start/stop the homebrew binary
       security.sudo.extraConfig = ''
         ${cfg.user} ALL=(ALL) NOPASSWD: ${kanataExecutable}, /usr/bin/pkill -x kanata
       '';
