@@ -233,7 +233,7 @@ in {
         ++ lib.optional (cfg.mode == "tray") "kanata-tray";
 
       system.activationScripts.postActivation.text = lib.mkAfter ''
-        ${lib.optionalString (cfg.mode == "tray") ''
+               ${lib.optionalString (cfg.mode == "tray") ''
                     # Clean up old stateful wrapper script if it exists
                     rm -f "${userHome}/.local/bin/sudo-kanata"
 
@@ -270,15 +270,17 @@ in {
           ''}
         ''}
 
-        ${lib.optionalString (cfg.configSource != null) ''
+               ${lib.optionalString (cfg.configSource != null) ''
             # ... (rest of the file remains unchanged)        ''}
 
-        ${lib.optionalString (cfg.configSource != null) ''
+               ${lib.optionalString (cfg.configSource != null) ''
           # Symlink kanata config
           sudo --user=${cfg.user} -- mkdir -p "$(dirname "${cfg.configFile}")"
           sudo --user=${cfg.user} -- rm -f "${cfg.configFile}"
           sudo --user=${cfg.user} -- ln -s ${cfg.configSource} "${cfg.configFile}"
         ''}
+
+        /usr/bin/pkill -x kanata-tray 2>/dev/null || true
       '';
 
       # daemon mode: root launchd daemon
