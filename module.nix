@@ -7,10 +7,12 @@
   cfg = config.services.kanata;
 
   # Determine Homebrew prefix based on Apple Silicon vs Intel
-  brewPrefix =
+  brewBasePath =
     if pkgs.stdenv.hostPlatform.isAarch64
-    then "/opt/homebrew/bin"
-    else "/usr/local/bin";
+    then "/opt/homebrew"
+    else "/usr/local";
+
+  brewPrefix = "${brewBasePath}/bin";
   kanataExecutable = "${brewPrefix}/kanata";
   kanataTrayExecutable = "${brewPrefix}/kanata-tray";
 
@@ -188,15 +190,21 @@ in {
   };
 
   config = lib.mkMerge [
-    # 1. Always attempt to kill leftover processes during activation
     {
       system.activationScripts.preActivation.text = lib.mkAfter ''
+        # Kill running processes
         /usr/bin/pkill -x kanata 2>/dev/null || true
         /usr/bin/pkill -x kanata-tray 2>/dev/null || true
-      '';
-    }
 
-    # 2. Add explicit cleanup when the module is DISABLED
+        ${lib.optionalString cfg.enableCmd ''
+          # Fix Homebrew Tap permissions for jtroo/tap
+          # Creates the leading directories as root, then gives ownership back to the user
+          # so `brew tap` doesn't fail with "Permission denied" during nix-darwin activation.
+          mkdir -p "${brewBasePath}/Library/Taps/jtroo"
+          chown -R ${cfg.user}:admin "${brewBasePath}/Library/Taps/jtroo"
+        ''}
+      '';
+    } # 2. Add explicit cleanup when the module is DISABLED
     (lib.mkIf (!cfg.enable) {
       system.activationScripts.preActivation.text = lib.mkBefore ''
         # Unload and remove user tray agent (Tray Mode)
