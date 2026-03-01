@@ -33,7 +33,6 @@
       pkgs.runCommand "kanata-generated-icons"
       {nativeBuildInputs = [pkgs.imagemagick];}
       ''
-        # Create separate output directories to avoid collisions
         mkdir -p $out/icons $out/status_icons
         FONT="${cfg.tray.icons.font}"
 
@@ -50,16 +49,11 @@
             label=$(printf "\\U''${BASH_REMATCH[1]}")
           fi
 
-          magick -background none -fill white -font "$FONT" -pointsize 200 \
+          # macOS Menu Bar Style: Black text, completely transparent background
+          magick -background none -fill black -font "$FONT" -pointsize 200 \
             label:"$label" -trim +repage \
             -resize "''${target}x''${target}" \
             -gravity center -extent 128x128 \
-            $TMPDIR/glyph.png
-
-          magick -size 128x128 xc:none \
-            -fill white -draw "roundrectangle 4,4 123,123 20,20" \
-            $TMPDIR/glyph.png \
-            -compose Dst_Out -composite \
             $outdir/$name.png
         }
 
@@ -243,10 +237,12 @@ in {
                     # Clean up old stateful wrapper script if it exists
                     rm -f "${userHome}/.local/bin/sudo-kanata"
 
-                    # Create both icon directories
+                 # Create both icon directories
                     sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/icons"
                     sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/status_icons"
 
+                    # Nuke default .ico files so kanata-tray doesn't prioritize them over our generated .png files
+                    sudo --user=${cfg.user} -- find "${userHome}/Library/Application Support/kanata-tray/status_icons" -name "*.ico" -delete
                     # Symlink kanata-tray TOML config (instead of copying)
                     sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
                     sudo --user=${cfg.user} -- ln -s ${trayConfig} "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
