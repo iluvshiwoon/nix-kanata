@@ -75,7 +75,7 @@
           cfg.tray.icons.status)}
       ''
     else null;
-# Map the generated derivations back to their expected variables
+  # Map the generated derivations back to their expected variables
   generatedLayerIcons = lib.optionalAttrs (iconsPkg != null) (lib.mapAttrs (name: _: "${iconsPkg}/icons/${name}.png") cfg.tray.icons.labels);
   generatedStatusIcons = lib.optionalAttrs (iconsPkg != null) (lib.mapAttrs (name: _: "${iconsPkg}/status_icons/${name}.png") cfg.tray.icons.status);
 
@@ -90,7 +90,6 @@
   statusIconsConfig = lib.optionalAttrs (statusFilesToLink != {}) {
     defaults.status_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/status_icons/${builtins.baseNameOf path}") statusFilesToLink;
   };
-  :w
   # The wrapper ensures kanata is launched via sudo but maintains process control so the tray can cleanly kill it
   sudoKanataWrapper = pkgs.writeScript "sudo-kanata" ''
     #!/bin/bash
@@ -236,7 +235,7 @@ in {
         (lib.optional (!cfg.enableCmd) "kanata")
         ++ lib.optional (cfg.mode == "tray") "kanata-tray";
 
-system.activationScripts.postActivation.text = lib.mkAfter ''
+      system.activationScripts.postActivation.text = lib.mkAfter ''
         ${lib.optionalString (cfg.mode == "tray") ''
                     # Clean up old stateful wrapper script if it exists
                     rm -f "${userHome}/.local/bin/sudo-kanata"
@@ -244,7 +243,7 @@ system.activationScripts.postActivation.text = lib.mkAfter ''
                     # Create both icon directories
                     sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/icons"
                     sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/status_icons"
-                    
+
                     # Symlink kanata-tray TOML config (instead of copying)
                     sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
                     sudo --user=${cfg.user} -- ln -s ${trayConfig} "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
@@ -259,7 +258,7 @@ system.activationScripts.postActivation.text = lib.mkAfter ''
               )
               layerFilesToLink)}
           ''}
-          
+
           ${lib.optionalString (statusFilesToLink != {}) ''
             # Symlink status icons
             ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
@@ -273,7 +272,7 @@ system.activationScripts.postActivation.text = lib.mkAfter ''
         ''}
 
         ${lib.optionalString (cfg.configSource != null) ''
-        # ... (rest of the file remains unchanged)        ''}
+            # ... (rest of the file remains unchanged)        ''}
 
         ${lib.optionalString (cfg.configSource != null) ''
           # Symlink kanata config
