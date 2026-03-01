@@ -24,12 +24,13 @@
     let
       iconsPkg =
         pkgs.runCommand "kanata-layer-icons"
-        {nativeBuildInputs = [pkgs.imagemagick cfg.tray.icons.font];}
+        {nativeBuildInputs = [pkgs.imagemagick];}
         ''
           mkdir -p $out
-          FONT=$(find ${cfg.tray.icons.font} -name '*.ttf' -o -name '*.otf' | head -1)
-          if [ -z "$FONT" ]; then
-            echo "error: no TTF/OTF font found in ${cfg.tray.icons.font}" >&2
+          FONT="${cfg.tray.icons.font}"
+
+          if [ ! -f "$FONT" ]; then
+            echo "error: TTF/OTF font not found at $FONT" >&2
             exit 1
           fi
 
@@ -64,10 +65,14 @@
   );
 
   allIcons = generatedIcons // cfg.tray.icons.files;
+  filesToLink = allIcons // cfg.tray.icons.status;
 
   # FIX: Use absolute paths in the TOML so kanata-tray never loses them
   layerIconsConfig = lib.optionalAttrs (allIcons != {}) {
     defaults.layer_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}") allIcons;
+  };
+  statusIconsConfig = lib.optionalAttrs (cfg.tray.icons.status != {}) {
+    defaults.status_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}") cfg.tray.icons.status;
   };
 
   # The wrapper ensures kanata is launched via sudo but maintains process control so the tray can cleanly kill it
@@ -82,20 +87,25 @@
     wait $KANATA_PID
   '';
 
-  trayConfig = tomlFormat.generate "kanata-tray.toml" (lib.recursiveUpdate (lib.recursiveUpdate {
-      defaults = {
-        kanata_executable = "${sudoKanataWrapper}";
-        tcp_port = 5829;
-        autorestart_on_crash = true;
-      };
-      presets.default = {
-        kanata_config = cfg.configFile;
-        autorun = true;
-        extra_args = ["--nodelay"];
-      };
-    }
-    layerIconsConfig)
-  cfg.tray.settings);
+  trayConfig = tomlFormat.generate "kanata-tray.toml" (
+    lib.foldl lib.recursiveUpdate {} [
+      {
+        defaults = {
+          kanata_executable = "${sudoKanataWrapper}";
+          tcp_port = 5829;
+          autorestart_on_crash = true;
+        };
+        presets.default = {
+          kanata_config = cfg.configFile;
+          autorun = true;
+          extra_args = ["--nodelay"];
+        };
+      }
+      layerIconsConfig
+      statusIconsConfig
+      cfg.tray.settings
+    ]
+  );
 in {
   options.services.kanata = {
     enable = lib.mkEnableOption "kanata keyboard remapper (via Homebrew)";
@@ -140,6 +150,12 @@ in {
       description = "Create a launchd user agent that starts kanata-tray automatically at login.";
     };
 
+    tray.icons.status = lib.mkOption {
+      type = lib.types.attrsOf lib.types.path;
+      default = {};
+      description = "Map of kanata-tray status states (e.g., 'active', 'inactive') to custom icon files (PNG recommended).";
+    };
+
     tray.icons.labels = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = {};
@@ -147,11 +163,10 @@ in {
     };
 
     tray.icons.font = lib.mkOption {
-      type = lib.types.package;
-      default = pkgs.liberation_ttf;
-      description = "Font package (must contain .ttf or .otf files) used for generated layer icons.";
+      type = lib.types.either lib.types.path lib.types.str;
+      default = "${pkgs.liberation_ttf}/share/fonts/truetype/LiberationSans-Regular.ttf";
+      description = "Direct path to the .ttf or .otf font file used for generated layer icons.";
     };
-
     tray.icons.files = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = {};
@@ -166,12 +181,30 @@ in {
   };
 
   config = lib.mkMerge [
+    # 1. Always attempt to kill leftover processes during activation
     {
       system.activationScripts.preActivation.text = lib.mkAfter ''
         /usr/bin/pkill -x kanata 2>/dev/null || true
         /usr/bin/pkill -x kanata-tray 2>/dev/null || true
       '';
     }
+
+    # 2. Add explicit cleanup when the module is DISABLED
+    (lib.mkIf (!cfg.enable) {
+      system.activationScripts.preActivation.text = lib.mkBefore ''
+        # Unload and remove user tray agent (Tray Mode)
+        if [ -e "${userHome}/Library/LaunchAgents/org.kanata.tray.plist" ]; then
+          sudo --user=${cfg.user} -- /bin/launchctl unload "${userHome}/Library/LaunchAgents/org.kanata.tray.plist" 2>/dev/null || true
+          rm -f "${userHome}/Library/LaunchAgents/org.kanata.tray.plist"
+        fi
+
+        # Unload and remove system daemon (Daemon Mode)
+        if [ -e "/Library/LaunchDaemons/org.kanata.daemon.plist" ]; then
+          /bin/launchctl unload "/Library/LaunchDaemons/org.kanata.daemon.plist" 2>/dev/null || true
+          rm -f "/Library/LaunchDaemons/org.kanata.daemon.plist"
+        fi
+      '';
+    })
 
     (lib.mkIf cfg.enable {
       warnings =
@@ -202,7 +235,7 @@ in {
           sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
           sudo --user=${cfg.user} -- ln -s ${trayConfig} "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
 
-          ${lib.optionalString (allIcons != {}) ''
+          ${lib.optionalString (filesToLink != {}) ''
             # Symlink layer icons
             ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
                 name: path: ''
@@ -210,7 +243,7 @@ in {
                   sudo --user=${cfg.user} -- ln -s ${path} "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}"
                 ''
               )
-              allIcons)}
+              filesToLink)}
           ''}
         ''}
 
