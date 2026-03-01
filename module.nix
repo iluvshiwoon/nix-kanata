@@ -222,6 +222,9 @@ in {
         lib.optional (!config.homebrew.enable)
         "services.kanata: homebrew is not enabled in your nix-darwin config, but kanata requires it to install properly.";
 
+      # Add the Nixpkgs version to the system path if Homebrew isn't managing it
+      environment.systemPackages = lib.optional cfg.enableCmd pkgs.kanata-with-cmd;
+
       # Everything is managed natively by Homebrew!
       homebrew.casks = ["karabiner-elements"];
 
