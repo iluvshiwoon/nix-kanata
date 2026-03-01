@@ -25,18 +25,16 @@
   # Safe fallback for user home directory
   userHome = config.users.users.${cfg.user}.home or "/Users/${cfg.user}";
 
-  # Safely prefix names to avoid filename collisions between a layer and a status sharing a name
-  layerLabelsToGenerate = lib.mapAttrs' (name: value: lib.nameValuePair "layer_${name}" value) cfg.tray.icons.labels;
-  statusLabelsToGenerate = lib.mapAttrs' (name: value: lib.nameValuePair "status_${name}" value) cfg.tray.icons.status;
-  allLabelsToGenerate = layerLabelsToGenerate // statusLabelsToGenerate;
+  # Remove the prefix mapping logic entirely
 
   iconsPkg =
-    if (cfg.mode == "tray" && allLabelsToGenerate != {})
+    if (cfg.mode == "tray" && (cfg.tray.icons.labels != {} || cfg.tray.icons.status != {}))
     then
       pkgs.runCommand "kanata-generated-icons"
       {nativeBuildInputs = [pkgs.imagemagick];}
       ''
-        mkdir -p $out
+        # Create separate output directories to avoid collisions
+        mkdir -p $out/icons $out/status_icons
         FONT="${cfg.tray.icons.font}"
 
         if [ ! -f "$FONT" ]; then
@@ -45,7 +43,7 @@
         fi
 
         gen_icon() {
-          local name="$1" label="$2"
+          local name="$1" label="$2" outdir="$3"
           local target=88  # 128 - 2*20 padding
 
           if [[ "$label" =~ ^U\+([0-9A-Fa-f]+)$ ]]; then
@@ -62,32 +60,37 @@
             -fill white -draw "roundrectangle 4,4 123,123 20,20" \
             $TMPDIR/glyph.png \
             -compose Dst_Out -composite \
-            $out/$name.png
+            $outdir/$name.png
         }
 
+        # Generate into respective directories
         ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
-            name: label: "gen_icon ${lib.escapeShellArg name} ${lib.escapeShellArg label}"
+            name: label: "gen_icon ${lib.escapeShellArg name} ${lib.escapeShellArg label} $out/icons"
           )
-          allLabelsToGenerate)}
+          cfg.tray.icons.labels)}
+
+        ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
+            name: label: "gen_icon ${lib.escapeShellArg name} ${lib.escapeShellArg label} $out/status_icons"
+          )
+          cfg.tray.icons.status)}
       ''
     else null;
+# Map the generated derivations back to their expected variables
+  generatedLayerIcons = lib.optionalAttrs (iconsPkg != null) (lib.mapAttrs (name: _: "${iconsPkg}/icons/${name}.png") cfg.tray.icons.labels);
+  generatedStatusIcons = lib.optionalAttrs (iconsPkg != null) (lib.mapAttrs (name: _: "${iconsPkg}/status_icons/${name}.png") cfg.tray.icons.status);
 
-  # Map the generated derivations back to their expected variables
-  generatedLayerIcons = lib.optionalAttrs (iconsPkg != null) (lib.mapAttrs (name: _: "${iconsPkg}/layer_${name}.png") cfg.tray.icons.labels);
-  generatedStatusIcons = lib.optionalAttrs (iconsPkg != null) (lib.mapAttrs (name: _: "${iconsPkg}/status_${name}.png") cfg.tray.icons.status);
+  layerFilesToLink = generatedLayerIcons // cfg.tray.icons.files;
+  statusFilesToLink = generatedStatusIcons;
 
-  allLayerIcons = generatedLayerIcons // cfg.tray.icons.files;
-  filesToLink = allLayerIcons // generatedStatusIcons;
-
-  # Create the TOML configuration blocks
-  layerIconsConfig = lib.optionalAttrs (allLayerIcons != {}) {
-    defaults.layer_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}") allLayerIcons;
+  # Create the TOML configuration blocks pointing to the correct folders
+  layerIconsConfig = lib.optionalAttrs (layerFilesToLink != {}) {
+    defaults.layer_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}") layerFilesToLink;
   };
 
-  statusIconsConfig = lib.optionalAttrs (generatedStatusIcons != {}) {
-    defaults.status_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}") generatedStatusIcons;
+  statusIconsConfig = lib.optionalAttrs (statusFilesToLink != {}) {
+    defaults.status_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/status_icons/${builtins.baseNameOf path}") statusFilesToLink;
   };
-
+  :w
   # The wrapper ensures kanata is launched via sudo but maintains process control so the tray can cleanly kill it
   sudoKanataWrapper = pkgs.writeScript "sudo-kanata" ''
     #!/bin/bash
@@ -232,27 +235,45 @@ in {
         # Only install standard kanata from Homebrew if we aren't using the Nixpkgs cmd version
         (lib.optional (!cfg.enableCmd) "kanata")
         ++ lib.optional (cfg.mode == "tray") "kanata-tray";
-      system.activationScripts.postActivation.text = lib.mkAfter ''
+
+system.activationScripts.postActivation.text = lib.mkAfter ''
         ${lib.optionalString (cfg.mode == "tray") ''
                     # Clean up old stateful wrapper script if it exists
                     rm -f "${userHome}/.local/bin/sudo-kanata"
 
-                    # Symlink kanata-tray TOML config (instead of copying)
+                    # Create both icon directories
                     sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/icons"
+                    sudo --user=${cfg.user} -- mkdir -p "${userHome}/Library/Application Support/kanata-tray/status_icons"
+                    
+                    # Symlink kanata-tray TOML config (instead of copying)
                     sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
                     sudo --user=${cfg.user} -- ln -s ${trayConfig} "${userHome}/Library/Application Support/kanata-tray/kanata-tray.toml"
 
-          ${lib.optionalString (filesToLink != {}) ''
-            # Symlink layer and status icons
+          ${lib.optionalString (layerFilesToLink != {}) ''
+            # Symlink layer icons
             ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
                 name: path: ''
                   sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}"
                   sudo --user=${cfg.user} -- ln -s ${path} "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}"
                 ''
               )
-              filesToLink)}
+              layerFilesToLink)}
+          ''}
+          
+          ${lib.optionalString (statusFilesToLink != {}) ''
+            # Symlink status icons
+            ${lib.concatStringsSep "\n" (lib.mapAttrsToList (
+                name: path: ''
+                  sudo --user=${cfg.user} -- rm -f "${userHome}/Library/Application Support/kanata-tray/status_icons/${builtins.baseNameOf path}"
+                  sudo --user=${cfg.user} -- ln -s ${path} "${userHome}/Library/Application Support/kanata-tray/status_icons/${builtins.baseNameOf path}"
+                ''
+              )
+              statusFilesToLink)}
           ''}
         ''}
+
+        ${lib.optionalString (cfg.configSource != null) ''
+        # ... (rest of the file remains unchanged)        ''}
 
         ${lib.optionalString (cfg.configSource != null) ''
           # Symlink kanata config
