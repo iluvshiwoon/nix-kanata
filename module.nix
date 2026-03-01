@@ -16,6 +16,9 @@
 
   tomlFormat = pkgs.formats.toml {};
 
+  # Safe fallback for user home directory
+  userHome = config.users.users.${cfg.user}.home or "/Users/${cfg.user}";
+
   # Generate icons from labels using imagemagick (tray mode only)
   generatedIcons = lib.optionalAttrs (cfg.mode == "tray" && cfg.tray.icons.labels != {}) (
     let
@@ -62,12 +65,10 @@
 
   allIcons = generatedIcons // cfg.tray.icons.files;
 
+  # FIX: Use absolute paths in the TOML so kanata-tray never loses them
   layerIconsConfig = lib.optionalAttrs (allIcons != {}) {
-    defaults.layer_icons = lib.mapAttrs (name: path: builtins.baseNameOf path) allIcons;
+    defaults.layer_icons = lib.mapAttrs (name: path: "${userHome}/Library/Application Support/kanata-tray/icons/${builtins.baseNameOf path}") allIcons;
   };
-
-  # Safe fallback for user home directory
-  userHome = config.users.users.${cfg.user}.home or "/Users/${cfg.user}";
 
   # The wrapper ensures kanata is launched via sudo but maintains process control so the tray can cleanly kill it
   sudoKanataWrapper = pkgs.writeScript "sudo-kanata" ''
@@ -83,7 +84,6 @@
 
   trayConfig = tomlFormat.generate "kanata-tray.toml" (lib.recursiveUpdate (lib.recursiveUpdate {
       defaults = {
-        # Directly reference the immutable Nix store wrapper script
         kanata_executable = "${sudoKanataWrapper}";
         tcp_port = 5829;
         autorestart_on_crash = true;
@@ -99,6 +99,12 @@
 in {
   options.services.kanata = {
     enable = lib.mkEnableOption "kanata keyboard remapper (via Homebrew)";
+
+    enableCmd = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Use the kanata-with-cmd package to allow executing shell commands from your layout.";
+    };
 
     mode = lib.mkOption {
       type = lib.types.enum ["daemon" "tray"];
@@ -174,11 +180,21 @@ in {
 
       # Everything is managed natively by Homebrew!
       homebrew.casks = ["karabiner-elements"];
-      homebrew.brews = ["kanata"] ++ lib.optional (cfg.mode == "tray") "kanata-tray";
+
+      homebrew.taps = lib.optional cfg.enableCmd "jtroo/tap";
+      homebrew.brews =
+        [
+          (
+            if cfg.enableCmd
+            then "jtroo/tap/kanata-with-cmd"
+            else "kanata"
+          )
+        ]
+        ++ lib.optional (cfg.mode == "tray") "kanata-tray";
 
       system.activationScripts.postActivation.text = lib.mkAfter ''
         ${lib.optionalString (cfg.mode == "tray") ''
-          # Clean up the old, stateful wrapper script if it exists!
+          # Clean up old stateful wrapper script if it exists
           rm -f "${userHome}/.local/bin/sudo-kanata"
 
           # Symlink kanata-tray TOML config (instead of copying)
@@ -230,7 +246,7 @@ in {
           Label = "org.kanata.tray";
           ProgramArguments = [kanataTrayExecutable];
           RunAtLoad = true;
-          KeepAlive = false;
+          KeepAlive = true;
           StandardOutPath = "/tmp/kanata-tray.log";
           StandardErrorPath = "/tmp/kanata-tray.err";
         };
