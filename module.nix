@@ -13,7 +13,11 @@
     else "/usr/local";
 
   brewPrefix = "${brewBasePath}/bin";
-  kanataExecutable = "${brewPrefix}/kanata";
+
+  kanataExecutable =
+    if cfg.enableCmd
+    then "${pkgs.kanata-with-cmd}/bin/kanata"
+    else "${brewPrefix}/kanata";
   kanataTrayExecutable = "${brewPrefix}/kanata-tray";
 
   tomlFormat = pkgs.formats.toml {};
@@ -195,14 +199,6 @@ in {
         # Kill running processes
         /usr/bin/pkill -x kanata 2>/dev/null || true
         /usr/bin/pkill -x kanata-tray 2>/dev/null || true
-
-        ${lib.optionalString cfg.enableCmd ''
-          # Fix Homebrew Tap permissions for jtroo/tap
-          # Creates the leading directories as root, then gives ownership back to the user
-          # so `brew tap` doesn't fail with "Permission denied" during nix-darwin activation.
-          mkdir -p "${brewBasePath}/Library/Taps/jtroo"
-          chown -R ${cfg.user}:admin "${brewBasePath}/Library/Taps/jtroo"
-        ''}
       '';
     } # 2. Add explicit cleanup when the module is DISABLED
     (lib.mkIf (!cfg.enable) {
@@ -229,17 +225,10 @@ in {
       # Everything is managed natively by Homebrew!
       homebrew.casks = ["karabiner-elements"];
 
-      homebrew.taps = lib.optional cfg.enableCmd "jtroo/tap";
       homebrew.brews =
-        [
-          (
-            if cfg.enableCmd
-            then "jtroo/tap/kanata-with-cmd"
-            else "kanata"
-          )
-        ]
+        # Only install standard kanata from Homebrew if we aren't using the Nixpkgs cmd version
+        (lib.optional (!cfg.enableCmd) "kanata")
         ++ lib.optional (cfg.mode == "tray") "kanata-tray";
-
       system.activationScripts.postActivation.text = lib.mkAfter ''
         ${lib.optionalString (cfg.mode == "tray") ''
                     # Clean up old stateful wrapper script if it exists
